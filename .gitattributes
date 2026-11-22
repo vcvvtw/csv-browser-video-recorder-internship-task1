@@ -8,3 +8,5 @@ Dockerfile text eol=lf
 *.py text eol=lf
 *.csv text eol=lf
 *.md text eol=lf
+*.webm binary
+*.mp4 binary

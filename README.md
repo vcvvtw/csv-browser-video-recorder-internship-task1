@@ -182,11 +182,16 @@ python -m unittest discover -s tests -v
 
 ---
 
-## Checklist
+## Configuration
 
-- [x] Separate `web` (Apache + mod_wsgi) and `db` (PostgreSQL 16) containers orchestrated via Docker Compose.
-- [x] Host port 8000 mapped to container port 80.
-- [x] Database configuration provided via environment variables with `.env` support.
-- [x] Named volumes `db_data` and `uploads` preserve data across container restarts.
-- [x] Startup synchronization: `web` waits for `db` health via `condition: service_healthy`.
-- [x] Static `/media` delivery handled efficiently via Apache `Alias`.
+The stack can be customized using environment variables or a `.env` file:
+
+| Variable | Default | Description |
+|---|---|---|
+| `DB_HOST` | `db` | PostgreSQL service host |
+| `DB_PORT` | `5432` | PostgreSQL port |
+| `DB_NAME` | `videos` | Database name |
+| `DB_USER` | `video_user` | Database username |
+| `DB_PASSWORD` | `video_pass` | Database password |
+| `DB_CONNECT_TIMEOUT` | `10` | Connection timeout in seconds |
+| `UPLOADS_DIR` | `/app/uploads` | Storage directory for video files |
