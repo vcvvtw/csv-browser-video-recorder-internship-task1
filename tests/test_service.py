@@ -1,3 +1,4 @@
+import logging
 import os
 import sys
 import tempfile
@@ -15,6 +16,10 @@ class TestWebServiceUnit(unittest.TestCase):
     def setUp(self):
         web_service.app.config["TESTING"] = True
         self.client = web_service.app.test_client()
+        logging.disable(logging.CRITICAL)
+
+    def tearDown(self):
+        logging.disable(logging.NOTSET)
 
     def test_build_safe_filename(self):
         fn1 = web_service.build_safe_filename("Acme Berlin Tech", "sample.webm")
