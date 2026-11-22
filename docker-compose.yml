@@ -6,11 +6,13 @@ services:
     volumes:
       - uploads:/app/uploads
     environment:
-      DB_HOST: db
-      DB_PORT: 5432
+      DB_HOST: ${DB_HOST:-db}
+      DB_PORT: ${DB_PORT:-5432}
       DB_NAME: ${DB_NAME:-videos}
       DB_USER: ${DB_USER:-video_user}
       DB_PASSWORD: ${DB_PASSWORD:-video_pass}
+      DB_CONNECT_TIMEOUT: ${DB_CONNECT_TIMEOUT:-10}
+      UPLOADS_DIR: /app/uploads
     depends_on:
       db:
         condition: service_healthy

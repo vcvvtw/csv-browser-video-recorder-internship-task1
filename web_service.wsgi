@@ -1,13 +1,13 @@
-import sys
 import os
+import sys
 
-# Add application directory to path
-sys.path.insert(0, "/app")
+APP_DIR = "/app"
+if APP_DIR not in sys.path:
+    sys.path.insert(0, APP_DIR)
 
-from web_service import app as application, wait_for_db
+from web_service import app as application, init_db
 
-# Initialize database schema on daemon startup
 try:
-    wait_for_db(max_retries=20, retry_interval=1.5)
-except Exception as err:
-    sys.stderr.write(f"WSGI startup database check warning: {err}\n")
+    init_db()
+except Exception as exc:
+    sys.stderr.write(f"Initial schema check failed: {exc}\n")

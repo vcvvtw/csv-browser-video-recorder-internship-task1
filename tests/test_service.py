@@ -1,7 +1,9 @@
 import os
 import sys
+import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
+from io import BytesIO
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, BASE_DIR)
@@ -14,28 +16,33 @@ class TestWebServiceUnit(unittest.TestCase):
         web_service.app.config["TESTING"] = True
         self.client = web_service.app.test_client()
 
-    def test_safe_company_filename(self):
-        self.assertEqual(
-            web_service.safe_company_filename("Acme Berlin Tech", "sample.webm"),
-            "Acme_Berlin_Tech.webm"
-        )
-        self.assertEqual(
-            web_service.safe_company_filename("Bavaria Soft Solutions! #1", "rec.webm"),
-            "Bavaria_Soft_Solutions___1.webm"
-        )
-        self.assertEqual(
-            web_service.safe_company_filename("   ", "sample.webm"),
-            "video.webm"
-        )
+    def test_build_safe_filename(self):
+        fn1 = web_service.build_safe_filename("Acme Berlin Tech", "sample.webm")
+        self.assertTrue(fn1.startswith("Acme_Berlin_Tech_"))
+        self.assertTrue(fn1.endswith(".webm"))
+
+        fn2 = web_service.build_safe_filename("Bavaria Soft Solutions! #1", "rec.mp4")
+        self.assertTrue(fn2.startswith("Bavaria_Soft_Solutions_1_"))
+        self.assertTrue(fn2.endswith(".mp4"))
+
+        fn3 = web_service.build_safe_filename("   ", "sample.webm")
+        self.assertTrue(fn3.startswith("company_"))
+        self.assertTrue(fn3.endswith(".webm"))
+
+        # Unsupported extensions must raise ValueError
+        with self.assertRaises(ValueError):
+            web_service.build_safe_filename("Acme Corp", "malicious.exe")
+        with self.assertRaises(ValueError):
+            web_service.build_safe_filename("Acme Corp", "archive.zip")
 
     def test_index_endpoint(self):
         res = self.client.get("/")
         self.assertEqual(res.status_code, 200)
         data = res.get_json()
-        self.assertEqual(data["status"], "running")
+        self.assertEqual(data["status"], "ok")
         self.assertIn("endpoints", data)
 
-    def test_health_endpoint(self):
+    def test_health_endpoint_ok(self):
         mock_conn = MagicMock()
         mock_cur = MagicMock()
         mock_conn.cursor.return_value.__enter__.return_value = mock_cur
@@ -44,7 +51,14 @@ class TestWebServiceUnit(unittest.TestCase):
             res = self.client.get("/health")
             self.assertEqual(res.status_code, 200)
             self.assertEqual(res.get_json()["status"], "ok")
-            self.assertEqual(res.get_json()["database"], "connected")
+            self.assertEqual(res.get_json()["db"], "ok")
+
+    def test_health_endpoint_error(self):
+        with patch("web_service.get_db", side_effect=Exception("DB connection refused")):
+            res = self.client.get("/health")
+            self.assertEqual(res.status_code, 503)
+            self.assertEqual(res.get_json()["status"], "error")
+            self.assertEqual(res.get_json()["db"], "unavailable")
 
     def test_get_video_url_missing_param(self):
         res = self.client.get("/get_video_url")
@@ -67,7 +81,7 @@ class TestWebServiceUnit(unittest.TestCase):
         mock_cur = MagicMock()
         mock_cur.fetchone.return_value = {
             "company_name": "Acme Berlin Tech",
-            "video_url": "http://127.0.0.1:8000/media/Acme_Berlin_Tech.webm"
+            "video_url": "http://127.0.0.1:8000/media/Acme_Berlin_Tech_abc12345.webm"
         }
         mock_conn.cursor.return_value.__enter__.return_value = mock_cur
 
@@ -75,7 +89,7 @@ class TestWebServiceUnit(unittest.TestCase):
             res = self.client.get("/get_video_url?company_name=Acme%20Berlin%20Tech")
             self.assertEqual(res.status_code, 200)
             self.assertEqual(res.get_json()["company_name"], "Acme Berlin Tech")
-            self.assertTrue(res.get_json()["video_url"].endswith("/media/Acme_Berlin_Tech.webm"))
+            self.assertTrue(res.get_json()["video_url"].endswith(".webm"))
 
     def test_upload_missing_file_field(self):
         res = self.client.post("/upload", data={"company_name": "Acme Berlin Tech"})
@@ -83,13 +97,36 @@ class TestWebServiceUnit(unittest.TestCase):
         self.assertIn("error", res.get_json())
 
     def test_upload_missing_company_name(self):
-        from io import BytesIO
         data = {
             "file": (BytesIO(b"FAKEWEBMDATA"), "test.webm")
         }
         res = self.client.post("/upload", data=data, content_type="multipart/form-data")
         self.assertEqual(res.status_code, 400)
         self.assertIn("error", res.get_json())
+
+    def test_upload_unsupported_format(self):
+        data = {
+            "file": (BytesIO(b"FAKEEXE"), "test.exe"),
+            "company_name": "Acme Berlin Tech"
+        }
+        res = self.client.post("/upload", data=data, content_type="multipart/form-data")
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("error", res.get_json())
+        self.assertIn("Unsupported video format", res.get_json()["error"])
+
+    def test_upload_db_error_cleans_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("web_service.get_uploads_dir", return_value=tmpdir):
+                with patch("web_service.get_db", side_effect=Exception("DB write failure")):
+                    data = {
+                        "file": (BytesIO(b"VIDEODATA"), "video.webm"),
+                        "company_name": "Fail Company"
+                    }
+                    res = self.client.post("/upload", data=data, content_type="multipart/form-data")
+                    self.assertEqual(res.status_code, 500)
+                    self.assertIn("Database error", res.get_json()["error"])
+                    # Ensure orphan file was removed
+                    self.assertEqual(len(os.listdir(tmpdir)), 0)
 
     def test_list_videos(self):
         mock_conn = MagicMock()
@@ -98,8 +135,8 @@ class TestWebServiceUnit(unittest.TestCase):
             {
                 "id": 1,
                 "company_name": "Acme Berlin Tech",
-                "file_path": "/app/uploads/Acme_Berlin_Tech.webm",
-                "video_url": "http://127.0.0.1:8000/media/Acme_Berlin_Tech.webm",
+                "file_path": "/app/uploads/Acme_Berlin_Tech_abc12345.webm",
+                "video_url": "http://127.0.0.1:8000/media/Acme_Berlin_Tech_abc12345.webm",
                 "created_at": "2026-11-22 12:00:00",
                 "updated_at": "2026-11-22 12:00:00"
             }

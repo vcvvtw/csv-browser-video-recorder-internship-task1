@@ -1,10 +1,12 @@
 # Internship Task 1: Web Service and Database in Docker
 
-Containerized deployment of the video recording web service and database layer using Docker Compose. The solution separates the application into two dedicated containers: an Apache web server running the Flask application via `mod_wsgi`, and an official PostgreSQL 16 database container with automated health checks, data persistence, and volume management.
+Deployment of the video recording web service and database in separate Docker containers using Docker Compose:
+- **`web`**: Apache 2.4 web server serving the Flask application via `mod_wsgi` on port `8000:80`.
+- **`db`**: PostgreSQL 16 with health check (`pg_isready`) and volume-backed storage.
 
 ---
 
-## Architecture Overview
+## Architecture
 
 ```text
 +-----------------------------------------------------------------------+
@@ -25,46 +27,48 @@ Containerized deployment of the video recording web service and database layer u
 +-----------------------------------------------------------------------+
 ```
 
-### Key Components
+### Components
 
-1. **`web` Service**:
-   - Base: Debian Bookworm Slim with native `apache2` and `libapache2-mod-wsgi-py3`.
-   - Python virtual environment with `Flask` and `psycopg2-binary`.
-   - Apache virtual host with `WSGIDaemonProcess` and direct static `Alias /media /app/uploads`.
-   - Host port `8000` mapped to container port `80`.
-   - Depends on `db` with `condition: service_healthy`.
-2. **`db` Service**:
+1. **`web` service**:
+   - Debian Bookworm Slim with native `apache2` and `libapache2-mod-wsgi-py3`.
+   - Python dependencies installed via `requirements.txt` (`Flask`, `psycopg2-binary`).
+   - Apache virtual host with `WSGIDaemonProcess` and static `Alias /media /app/uploads`.
+   - Depends on `db` via `condition: service_healthy`.
+2. **`db` service**:
    - Official image `postgres:16`.
-   - Native healthcheck: `pg_isready -U video_user -d videos`.
-   - Dedicated named volume `db_data` for database state persistence.
-3. **Data Persistence**:
-   - Database records persist in the `db_data` volume.
-   - Uploaded video files persist in the `uploads` volume.
-   - Both data and uploaded media survive container restarts and rebuilds.
+   - Health check: `pg_isready -U ${DB_USER:-video_user} -d ${DB_NAME:-videos}`.
+   - Dedicated named volume `db_data` for PostgreSQL data directory.
+3. **Data persistence**:
+   - Database state stored in `db_data`.
+   - Video files stored in `uploads`.
+   - Named volumes preserve both database rows and uploaded files across `docker compose down` and `docker compose up`.
 
 ---
 
-## Deliverables & Directory Structure
+## Directory Structure
 
 ```text
 internship_task1/
-├── Dockerfile              # Multi-stage Apache + mod_wsgi + Flask image
-├── docker-compose.yml      # Multi-container orchestration (web + db)
-├── apache.conf             # Apache VirtualHost & WSGI daemon configuration
-├── web_service.wsgi        # WSGI application entry point
-├── web_service.py          # Flask service with PostgreSQL adapter
-├── video_client.py         # Client functions: UploadVideo, GetVideoURL
-├── capture_video.py        # Automation recorder entry point (--server, --view-seconds)
-├── qscript.py              # Browser automation module with visual overlay
-├── input.csv               # Input company dataset
-├── requirements.txt        # Dependencies: flask, psycopg2-binary, requests, playwright
-├── .env.example            # Environment variables template
-├── .gitignore              # Standard git ignore rules
-├── README.md               # Documentation and execution guide
-├── tests/                  # Automated test suite
-│   ├── test_service.py     # Unit tests for endpoints and DB logic
-│   └── test_client.py      # Unit tests for client functions
-└── video/                  # Sample recorded webm videos
+├── Dockerfile                  # Apache + mod_wsgi + Flask container definition
+├── docker-compose.yml          # Multi-container orchestration (web + db)
+├── apache.conf                 # Apache VirtualHost & WSGI daemon configuration
+├── entrypoint.sh               # Runtime configuration and Apache startup script
+├── web_service.wsgi            # WSGI entry point
+├── web_service.py              # Flask service with PostgreSQL backend
+├── requirements.txt            # Server dependencies (Flask, psycopg2-binary)
+├── requirements-client.txt     # Client dependencies (requests, playwright)
+├── video_client.py             # Client API: UploadVideo, GetVideoURL
+├── capture_video.py            # Automation recorder CLI
+├── qscript.py                  # Browser recording scenario
+├── input.csv                   # Input company dataset
+├── .env.example                # Environment variables template
+├── .gitattributes              # LF line-ending enforcement for shell scripts
+├── .gitignore                  # Git ignore rules
+├── README.md                   # Documentation
+├── tests/                      # Unit test suite
+│   ├── test_service.py         # Tests for Flask service and PostgreSQL logic
+│   └── test_client.py          # Tests for client API
+└── video/                      # Recorded video samples (.webm)
     ├── Acme Berlin Tech.webm
     └── Bavaria Soft Solutions.webm
 ```
@@ -73,52 +77,46 @@ internship_task1/
 
 ## Quick Start
 
-### 1. Build and Start the Stack
-
-Ensure Docker and Docker Compose are running, then launch the services:
+### 1. Build and Start Containers
 
 ```bash
 docker compose up --build
 ```
 
-To run in detached (background) mode:
+To run in the background:
 ```bash
 docker compose up --build -d
 ```
 
-Compose automatically:
-1. Starts the `db` service and initializes PostgreSQL 16.
-2. Runs the health check (`pg_isready`) until the database is ready to accept queries.
-3. Builds and starts the `web` service once the database reports healthy.
-4. Initializes the `videos` table schema and `/app/uploads` storage.
+Startup sequence:
+1. `db` starts and initializes PostgreSQL 16.
+2. Compose monitors database health via `pg_isready`.
+3. `web` starts after `db` becomes healthy, verifies database connectivity, and binds to `http://127.0.0.1:8000`.
 
-### 2. Verify Stack Status
+### 2. Check Service Status & Logs
 
 ```bash
 docker compose ps
-```
-
-Check logs:
-```bash
 docker compose logs -f web
 docker compose logs -f db
 ```
 
 ---
 
-## Web Service Endpoints
+## API Endpoints
 
-The service listens on `http://127.0.0.1:8000`:
+The web service is available on `http://127.0.0.1:8000`:
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/upload` | Accepts multipart form with `file` (.webm) and `company_name`. Saves to `uploads/`, stores or updates record in PostgreSQL, and returns JSON with `company_name` and `video_url`. |
-| `GET` | `/get_video_url?company_name=<name>` | Retrieves the public video URL for the specified company. Returns HTTP 200 JSON, or HTTP 404 if not found. |
-| `GET` | `/media/<filename>` | Serves the uploaded video file directly (via Apache `Alias` and Flask) with `video/webm` MIME type for browser playback. |
-| `GET` | `/videos` | Returns a list of all saved video records in JSON format. |
-| `GET` | `/health` | Health check endpoint returning database connectivity status (`HTTP 200`). |
+| `GET` | `/` | Service status and endpoint list |
+| `GET` | `/health` | Connectivity check to PostgreSQL (returns 200 or 503) |
+| `POST` | `/upload` | Multipart upload (`file`, `company_name`), returns video URL |
+| `GET` | `/get_video_url?company_name=<name>` | Retrieves video URL for company (200 or 404) |
+| `GET` | `/media/<filename>` | Serves uploaded video directly via Apache Alias |
+| `GET` | `/videos` | Returns all recorded company video entries |
 
-### Quick API Checks
+### Examples
 
 ```bash
 # Health check
@@ -127,65 +125,68 @@ curl http://127.0.0.1:8000/health
 # List video records
 curl http://127.0.0.1:8000/videos
 
-# Query video URL by company name
+# Retrieve video URL by company name
 curl "http://127.0.0.1:8000/get_video_url?company_name=Acme%20Berlin%20Tech"
 ```
 
 ---
 
-## Running the Video Recorder with Upload & Preview
+## Running the Client & Video Recorder
 
-While the Docker Compose stack is running, execute the recorder from your host:
+To run the recorder on the host machine:
 
 ```bash
-# Preview each video in Chromium for 5 seconds after upload
+pip install -r requirements-client.txt
+playwright install chromium
+
+# Record from input.csv, upload to server, and preview each video for 5 seconds
 python capture_video.py --server http://127.0.0.1:8000 --view-seconds 5
 
-# Interactive preview (keeps browser open until Enter is pressed)
+# Interactive preview (press Enter to proceed to the next item)
 python capture_video.py --server http://127.0.0.1:8000 --view-seconds 0
 ```
 
 ---
 
-## Verifying Persistence Across Container Restarts
+## Testing Persistence
 
-1. Upload a video (e.g. via `capture_video.py` or curl).
+1. Upload a video file via `capture_video.py` or curl.
 2. Stop the containers:
    ```bash
    docker compose down
    ```
-3. Restart the containers without wiping volumes:
+3. Restart containers without `-v`:
    ```bash
    docker compose up -d
    ```
-4. Query the stored video:
+4. Query the stored data:
    ```bash
    curl http://127.0.0.1:8000/videos
    curl "http://127.0.0.1:8000/get_video_url?company_name=Acme%20Berlin%20Tech"
    ```
-   Both the PostgreSQL database records and the uploaded video files in `/app/uploads` are preserved intact.
+   Both the PostgreSQL records in `db_data` and the media files in `uploads` remain available.
 
 ---
 
-## Running Automated Tests
+## Running Tests
 
 Run unit tests inside the `web` container:
 ```bash
 docker compose exec web python -m unittest discover -s tests -v
 ```
 
-Or run locally on host:
+Or run locally on the host:
 ```bash
 python -m unittest discover -s tests -v
 ```
 
 ---
 
-## Acceptance Checklist
+## Checklist
 
-- [x] `docker compose up --build` starts both containers without errors.
-- [x] `POST /upload` uploads a video and returns a working URL.
-- [x] `GET /get_video_url?company_name=...` returns the URL (HTTP 200) or 404 for unknown names.
-- [x] After `docker compose down` and `docker compose up`, data and videos are preserved.
-- [x] `web` waits for `db` readiness (`service_healthy` condition + startup retry loop) and never crashes on startup.
-- [x] Database credentials passed via environment variables without hardcoded secrets.
+- [x] Separate `web` (Apache + mod_wsgi) and `db` (PostgreSQL 16) containers orchestrated via Docker Compose.
+- [x] Host port 8000 mapped to container port 80.
+- [x] Database configuration provided via environment variables with `.env` support.
+- [x] Named volumes `db_data` and `uploads` preserve data across container restarts.
+- [x] Startup synchronization: `web` waits for `db` health via `condition: service_healthy`.
+- [x] Static `/media` delivery handled efficiently via Apache `Alias`.
